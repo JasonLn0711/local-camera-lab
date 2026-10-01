@@ -1,0 +1,1222 @@
+可以。以 2026 年 10 月目前的狀況來看，**台灣買得到的 Xiaomi 智慧攝影機 C400，可以把 live 影像拉出來給你自己的程式使用**；只是它不是走「攝影機原生 RTSP/ONVIF + 官方公開 API」這條標準路線，而是要透過 Xiaomi 自己的加密 P2P 串流協定，再用中介層轉成 RTSP / WebRTC。
+
+我查到台灣官網目前販售的 C400 型號是 **MJSXJ23CM**，解析度 2560×1440；台灣版使用手冊也明確寫出視訊編碼是 **H.265**。:chatgpt-content-reference{index="0"}
+
+最重要的結論可以先畫成：
+
+```text
+Xiaomi C400
+   │
+   │ Xiaomi proprietary encrypted P2P
+   │ (MISS / CS2)
+   ▼
+ go2rtc
+   │
+   ├── RTSP  ───► Python / OpenCV / PyAV
+   │
+   ├── WebRTC ──► Web application
+   │
+   ├── HLS ─────► Browser / player
+   │
+   └── stream ──► Frigate / AI / CV pipeline
+                        │
+                        ▼
+                 YOLO / VLM / tracking
+                 recording / detection
+                 your own application
+```
+
+所以你的構想是可行的。
+
+### 1. C400 本身不是一般的「開放 RTSP Camera」
+
+我目前沒有找到 Xiaomi 對 C400 提供一個像：
+
+```text
+rtsp://192.168.1.50:554/live
+```
+
+這種官方公開 RTSP endpoint，也沒有看到 C400 官方宣稱支援 ONVIF。
+
+它的架構比較像：
+
+```text
+C400
+ │
+ ├─ Mi Home / 米家
+ │
+ └─ Xiaomi encrypted P2P video
+```
+
+這也是為什麼你不能單純：
+
+```python
+cv2.VideoCapture("rtsp://camera-ip/...")
+```
+
+就取得影片。
+
+更關鍵的是，小米自己維護的官方 Home Assistant `xiaomi_home` 專案明確說明：攝影機串流使用 **P2P encryption**，加密金鑰是在 Mi Home App 和攝影機之間協商；官方 Home Assistant integration 被視為 untrusted client，因此**不提供攝影機 live video stream**。:chatgpt-content-reference{index="1"}
+
+所以這不是 Home Assistant 少做一個功能而已，而是 Xiaomi 的安全架構本身如此。
+
+---
+
+### 2. 但 C400 的確存在可以操作的 video interface
+
+這裡事情就變得有趣了。
+
+C400 的 MIoT specification 裡面實際存在：
+
+```text
+p2p-stream
+```
+
+以及：
+
+```text
+start-p2p-stream
+stop-stream
+camera-stream-for-google-home
+stream-address
+stream-auth-token
+expiration-time
+```
+
+也就是說，攝影機內部本來就有一整套「建立串流 → 授權 → 取得串流 → 終止串流」的機制。:chatgpt-content-reference{index="2"}
+
+問題只在於：
+
+> Xiaomi 沒有把這套東西包裝成給一般使用者用的簡單公開 Camera API。
+
+官方 Xiaomi IoT Developer Platform 比較偏向「硬體廠商把產品接進 Xiaomi 生態」，不是讓你買一台 C400 後，就拿一組 REST API key 自由取得 raw video。:chatgpt-content-reference{index="3"}
+
+---
+
+## 3. 現在最值得用的方法：go2rtc
+
+這是我目前最推薦你的方案。
+
+從 **go2rtc 1.9.13** 開始加入 Xiaomi Camera source，到了目前最新的 **v1.9.14（2026-01-19）**，又大幅改善了 Xiaomi 新款攝影機支援。:chatgpt-content-reference{index="4"}
+
+而且它不是傳統的：
+
+> 破解韌體 → root camera → 安裝 RTSP server
+
+而是直接實作 Xiaomi Camera 使用的 P2P protocol。
+
+go2rtc 官方文件說得很清楚：
+
+> Xiaomi 2020 年之後逐漸採用統一的 `miss` camera protocol。
+
+go2rtc 支援 `xiaomi/miss`、多種 `cs2` P2P transport，而且現在可以直接透過 Xiaomi 帳號登入，取得攝影機。:chatgpt-content-reference{index="5"}
+
+最重要的是：
+
+> 金鑰取得需要 Internet，但是實際 Camera → go2rtc 的影片連線可以走本地 LAN。
+
+也就是：
+
+```text
+               Internet
+                  │
+             authentication
+             / encryption key
+                  │
+                  ▼
+C400 ─────────► go2rtc
+      Local LAN
+```
+
+而不是：
+
+```text
+C400
+ ↓
+Xiaomi Cloud
+ ↓
+Internet
+ ↓
+your computer
+```
+
+go2rtc 官方文件明確寫：
+
+> Each time you connect to the camera, Internet access is needed to obtain encryption keys.
+>
+> Connection to the camera is local only. :chatgpt-content-reference{index="6"}
+
+
+對你這種要做 AI / CV / research prototype 的用途，這是很重要的差異。
+
+---
+
+# 4. C400 已經有人實際成功
+
+go2rtc 的 Xiaomi camera compatibility list 已經包含：
+
+```text
+Xiaomi Smart Camera C400
+
+chuangmi.camera.039a04
+chuangmi.camera.039c04
+``` :chatgpt-content-reference{index="7"}
+
+
+其中：
+
+```text
+chuangmi.camera.039a04
+```
+
+是較早期海外版本；
+
+而：
+
+```text
+chuangmi.camera.039c04
+```
+
+是後來的 ECN 海外版本。:chatgpt-content-reference{index="8"}
+
+比較值得注意的是，我找到實際 **MJSXJ23CM** 使用者的紀錄，其裝置被辨識成：
+
+```text
+chuangmi.camera.039c04
+``` :chatgpt-content-reference{index="9"}
+
+
+而台灣官方現在販售的就是：
+
+```text
+MJSXJ23CM
+``` :chatgpt-content-reference{index="10"}
+
+
+所以你現在台灣通路買到的新 C400，**很有可能**就是 `039c04`。
+
+不過我不會把這件事講成 100% 保證，因為 Xiaomi 同一個商品名稱可能存在硬體 revision。實際接上去後應該確認 internal model。
+
+---
+
+# 5. 你實際上可以做到什麼？
+
+如果跑：
+
+```text
+C400 → go2rtc
+```
+
+之後，你就可以把它當成普通的 IP Camera 使用。
+
+例如 go2rtc 對外提供：
+
+```text
+rtsp://YOUR_SERVER:8554/c400
+```
+
+你的 Python 就可以：
+
+```python
+import cv2
+
+url = "rtsp://127.0.0.1:8554/c400"
+
+cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+
+while True:
+    ok, frame = cap.read()
+
+    if not ok:
+        break
+
+    # your computer vision code
+    print(frame.shape)
+
+cap.release()
+```
+
+後面就完全進入你熟悉的 CV pipeline：
+
+```text
+C400
+
+ ↓ live
+
+go2rtc
+
+ ↓ RTSP
+
+FFmpeg / PyAV / OpenCV
+
+ ↓ frames
+
+YOLO
+SAM
+face detection
+pose estimation
+motion detection
+VLM
+OCR
+tracking
+
+ ↓
+
+your application
+```
+
+例如：
+
+```python
+frame
+   ↓
+YOLO
+   ↓
+person detected?
+   ↓
+save frame
+   ↓
+SQLite / PostgreSQL
+   ↓
+notification
+```
+
+或者：
+
+```text
+C400
+ ↓
+live video
+ ↓
+local GPU
+ ↓
+VLM
+ ↓
+"What is happening in the room?"
+ ↓
+event database
+```
+
+這就完全可以。
+
+---
+
+## 6. 甚至可以拿來做 AI agent
+
+例如你可以自己建立：
+
+```text
+Camera
+   ↓
+Video ingest
+   ↓
+Object detection
+   ↓
+Event extraction
+   ↓
+Agent
+```
+
+Agent 不需要一直吃 30 FPS。
+
+比較合理的是：
+
+```text
+30 FPS camera
+
+ ↓
+
+CV detector
+
+ ↓
+
+event
+
+"person entered room"
+"cat is on desk"
+"package appeared"
+
+ ↓
+
+agent
+```
+
+這會比：
+
+```text
+30 FPS
+ ↓
+VLM
+ ↓
+LLM
+```
+
+便宜、穩定非常多。
+
+---
+
+# 7. 還可以拿到聲音
+
+C400 並不是只有 video。
+
+go2rtc 的 Xiaomi implementation 也支援：
+
+> two-way audio :chatgpt-content-reference{index="11"}
+
+
+而 C400 使用者的實際串流報告顯示可以取得：
+
+```text
+video: H265
+audio: OPUS
+``` :chatgpt-content-reference{index="12"}
+
+
+因此理論上你的 application 可以做到：
+
+```text
+video
++
+audio
+```
+
+甚至：
+
+```text
+microphone
+ ↓
+ASR
+ ↓
+event understanding
+```
+
+這其實滿適合你現在 project aura 這類語音／multimodal 的實驗。
+
+---
+
+# 8. 但有一個 C400-specific 問題要特別注意
+
+這是我認為你真的買之前必須知道的。
+
+較舊的：
+
+```text
+chuangmi.camera.039a04
+```
+
+有人在 go2rtc 實測時碰到：
+
+```text
+HEVC / H.265 decoding errors
+stuttering
+missing reference frames
+NAL unit errors
+```
+
+而且 WebRTC/HLS 有時會有問題。:chatgpt-content-reference{index="13"}
+
+這也是為什麼新版：
+
+```text
+039c04
+```
+
+會比：
+
+```text
+039a04
+```
+
+更值得買。
+
+而 go2rtc 1.9.14 剛好也針對 Xiaomi 的 `cs2`、TCP、keepalive 等進行大量改善。:chatgpt-content-reference{index="14"}
+
+所以如果是我現在建實驗環境，我會要求：
+
+```text
+C400 MJSXJ23CM
++
+chuangmi.camera.039c04
++
+go2rtc 1.9.14+
+```
+
+而不是買老庫存。
+
+---
+
+# 9. Home Assistant 反而不是我第一選擇
+
+你可能會看到網路上很多：
+
+```text
+hass-xiaomi-miot
+```
+
+它確實可以存取 Xiaomi 裝置，也曾經透過：
+
+```text
+camera-stream-for-google-home
+```
+
+取得 temporary cloud HLS URL。:chatgpt-content-reference{index="15"}
+
+但是 C400 `MJSXJ23CM / 039c04` 已經有使用者回報：
+
+```text
+Error requesting stream
+does not support play stream service
+``` :chatgpt-content-reference{index="16"}
+
+
+所以如果目的純粹是：
+
+> 「我要把 Camera live feed 丟給自己的程式。」
+
+我會直接：
+
+```text
+C400
+ ↓
+go2rtc
+ ↓
+RTSP
+ ↓
+Python
+```
+
+而不是：
+
+```text
+C400
+ ↓
+Xiaomi MiOT
+ ↓
+Home Assistant
+ ↓
+Camera integration
+ ↓
+Python
+```
+
+後者多繞了一圈。
+
+---
+
+# 10. 我會怎麼設計你的架構
+
+如果是你要拿來做研究／project，我會直接這樣設計：
+
+```text
+                   ┌──────────────┐
+                   │ Xiaomi C400  │
+                   │ 2560×1440    │
+                   │ H.265        │
+                   └──────┬───────┘
+                          │
+                     Xiaomi P2P
+                          │
+                          ▼
+                   ┌──────────────┐
+                   │   go2rtc     │
+                   └──────┬───────┘
+                          │
+             ┌────────────┼────────────┐
+             │            │            │
+           RTSP        WebRTC         API
+             │            │            │
+             ▼            ▼            ▼
+          Python        Browser       Agent
+             │
+          PyAV
+          FFmpeg
+          OpenCV
+             │
+             ▼
+        NVIDIA GPU
+             │
+      ┌──────┼────────┐
+      │      │        │
+    YOLO    VLM      ASR
+      │      │        │
+      └──────┴────────┘
+             │
+             ▼
+        Event Engine
+             │
+      ┌──────┴──────┐
+      ▼             ▼
+  Database      AI Agent
+```
+
+這樣 C400 就只負責：
+
+> sensor。
+
+不要把 Xiaomi ecosystem 拉進你的 application logic。
+
+這樣未來你要換：
+
+```text
+C400
+   ↓
+Reolink
+   ↓
+USB camera
+   ↓
+RTSP camera
+```
+
+你的 AI pipeline 幾乎完全不用改。
+
+---
+
+## 我的結論
+
+所以，如果你的問題是：
+
+> 「在台灣買一台 Xiaomi C400，我能不能把即時影像拿出來，自己寫 Python/C++/Rust 程式做 computer vision、AI agent、錄影、偵測、VLM 等用途？」
+
+答案是：
+
+**可以，而且目前已經具有實際可行的開源方案。**
+
+但正確理解是：
+
+```text
+❌ C400 原生公開 RTSP
+❌ C400 原生 ONVIF
+❌ Xiaomi 官方一般使用者 Camera REST API
+
+✅ Xiaomi encrypted P2P stream
+✅ go2rtc 解出 live stream
+✅ local LAN video
+✅ RTSP output
+✅ WebRTC output
+✅ H.265 video
+✅ audio
+✅ Python / FFmpeg / OpenCV / Frigate
+```
+
+最大的限制則是：
+
+> **它仍依賴 Xiaomi 帳號以及取得 P2P encryption key 的流程，所以不是 100% vendor-independent、100% offline 的攝影機。** go2rtc 官方也明確指出，每次建立 Xiaomi camera connection 都需要網路取得 encryption keys。:chatgpt-content-reference{index="17"}
+
+因此，如果你是「手上已經有 C400，想拿來研究」，我會直接用它；如果你是「專門為了建立長期可控的 Computer Vision / AI Agent Camera Lab 才準備買攝影機」，我反而會優先考慮**原生提供 RTSP + ONVIF 的攝影機**。那會少掉 Xiaomi authentication、P2P encryption、韌體 revision 和相容性這一整層風險。
+
+以你現有的 Ubuntu + RTX 5080 環境，其實可以很自然地做成：
+
+**C400 → go2rtc → RTSP → Python/PyAV → YOLO → event stream → local SLM/agent。**
+可以，而且現在其實很適合做。若你的資料流是：
+
+```text
+Xiaomi C400
+   ↓
+go2rtc
+   ↓
+RTSP
+   ↓
+AI inference
+```
+
+那麼截至 **2026-10-01**，我會把可用的最新模型分成下面幾種，而不是把「影像辨識」全部當成同一類問題。
+
+| 你想做什麼 | 我會先選 | 特點 |
+|---|---|---|
+| 人、車、狗、貓、包裹等即時偵測 | **YOLO26** | 快、成熟、最容易直接吃 RTSP |
+| 不想事先限定類別，「找紅色背包」「找安全帽」 | **YOLOE-26** | Open-vocabulary detection + segmentation |
+| 精準框出／分割／持續追蹤物體 | **SAM 3.1** | text prompt + segmentation + video tracking |
+| 高準確率 detector、之後要 fine-tune | **RF-DETR** | 2026 很值得研究的 DETR 系列 |
+| 理解「現在發生什麼事」 | **Qwen3-VL 4B/8B** | VLM，能做場景與事件語意理解 |
+| 小型、頻繁地看 camera frame | **MiniCPM-V 4.6 1.3B** | 2026 新版，edge-oriented |
+| 想要一個兼具 detection + caption + VQA 的模型 | **Moondream 3.1** | 很適合 camera application |
+| 影像＋聲音一起理解 | **MiniCPM-o 4.5** | real-time streaming multimodal |
+
+其中，我最推薦你先從 **YOLO26 + Qwen3-VL/MiniCPM-V 雙層架構**開始。
+
+### 第一層：YOLO26，負責「一直看」
+
+目前真正已經發布、可以直接拿來用的最新版 Ultralytics YOLO 是 **YOLO26**。YOLO27 已經在 2026 年 9 月 13 日 YOLO Vision 2026 公布，但截至現在仍是「coming later this year」，還沒有正式可用 checkpoint，所以現在不要把研究環境押在 YOLO27 上。:chatgpt-content-reference{index="0"}
+
+YOLO26 本身可以做：
+
+```text
+Detection
+Segmentation
+Classification
+Pose
+Oriented bounding box
+Semantic segmentation
+Depth estimation
+```
+
+官方公布的 YOLO26 detection 五種尺寸在 COCO 上約為 40.9–57.5 mAP，而且設計重點就是 real-time / edge inference。:chatgpt-content-reference{index="1"}
+
+更方便的是，Ultralytics **原生就接受 RTSP stream**。所以甚至不必自己先寫 OpenCV decoder：:chatgpt-content-reference{index="2"}
+
+```python
+from ultralytics import YOLO
+
+model = YOLO("yolo26s.pt")
+
+stream = "rtsp://127.0.0.1:8554/c400"
+
+for result in model.predict(
+    source=stream,
+    stream=True,
+    device=0,
+    imgsz=640,
+):
+    print(result.boxes)
+```
+
+你的架構就直接變成：
+
+```text
+C400
+ ↓
+go2rtc
+ ↓
+rtsp://localhost:8554/c400
+ ↓
+YOLO26
+ ↓
+person / car / dog / cat / ...
+ ↓
+event
+```
+
+所以如果你的第一個 POC 是：
+
+> 有沒有人進來？
+> 有沒有狗？
+> 桌上有沒有東西？
+> 車子經過幾次？
+
+我會直接用 **YOLO26s** 起跑，而不是 VLM。
+
+---
+
+### 第二個很值得玩的：YOLOE-26
+
+如果你開始覺得：
+
+> 「COCO 的固定 80 類太侷限了。」
+
+那 YOLOE-26 會非常有趣。
+
+它是 **open-vocabulary detector**，可以直接在 runtime 告訴它：
+
+```python
+model.set_classes([
+    "person",
+    "red backpack",
+    "coffee cup",
+    "motorcycle helmet",
+])
+```
+
+而不一定要先為每個類別重新標資料、重新訓練。
+
+YOLOE-26 支援：
+
+```text
+文字 prompt
+視覺 exemplar
+prompt-free vocabulary
+bounding box
+instance segmentation
+```
+
+官方甚至內建 4,585 個名稱的 prompt-free vocabulary。:chatgpt-content-reference{index="3"}
+
+這對 surveillance / smart-home 類應用很重要。
+
+傳統 YOLO：
+
+```text
+我訓練過：
+person
+car
+dog
+
+→ 只能很好地找這些
+```
+
+YOLOE：
+
+```text
+今天：
+"yellow umbrella"
+
+明天：
+"delivery package"
+
+後天：
+"person wearing helmet"
+```
+
+不一定每次都重新 train。
+
+對你的研究性質，我反而認為 **YOLOE-26 比純 YOLO26 更值得玩**。
+
+---
+
+### 第三個：SAM 3.1，負責「這個東西到底在哪裡？」
+
+Meta 在 2025 年推出 SAM 3，而 **SAM 3.1 是 2026-03-27 的更新版**。
+
+現在它已經不只是早期 SAM 那種：
+
+> 點一下 → 把這個物體切出來。
+
+而是可以：
+
+```text
+文字 prompt
+     ↓
+"person wearing a red shirt"
+
+     ↓
+detect
+
+     ↓
+segment
+
+     ↓
+track through video
+```
+
+SAM 3 可以用文字或 visual exemplar 找出並追蹤概念；SAM 3.1 又加入 object multiplexing，一次 forward 可以追蹤最多 16 個 objects。Meta 報告中，在單張 H100、medium number of objects 的條件下吞吐可從 16 提升到約 32 FPS。:chatgpt-content-reference{index="4"}
+
+但注意：
+
+**我不建議你拿 SAM 3.1 對 C400 30 FPS 每一幀都硬跑。**
+
+它更適合：
+
+```text
+YOLO26
+ ↓
+有人出現
+ ↓
+SAM 3.1
+ ↓
+精準 segment + track
+```
+
+而不是：
+
+```text
+C400 30 FPS
+ ↓
+SAM 3.1
+ ↓
+每一幀全畫面分析
+```
+
+這是兩種完全不同的 compute budget。
+
+---
+
+### 第四個：RF-DETR
+
+如果你之後想把這變成一個正式 Computer Vision research project，我會把 **RF-DETR** 加進 benchmark。
+
+RF-DETR 已被列為 **ICLR 2026** 模型，而且提供 detection / segmentation，尤其強調 fine-tuning。Roboflow 自己公布的 benchmark 中，例如 RF-DETR-M 是 COCO AP 54.7、約 4.52 ms latency；不過這是開發者自己的 benchmark，應視為候選比較數據，而不是第三方最終裁決。:chatgpt-content-reference{index="5"}
+
+而且它有一個對你未來產品化可能很實際的點：
+
+```text
+RF-DETR → Apache 2.0
+YOLO26 → AGPL-3.0 / commercial license
+```
+
+因此如果未來不是研究，而是要包成 closed-source application，license 會變成真正的架構變數。:chatgpt-content-reference{index="6"}
+
+---
+
+## 但真正有趣的是 VLM
+
+前面那些模型看到的是：
+
+```text
+person
+chair
+dog
+cup
+bbox=(...)
+```
+
+可是你大概很快就會想要：
+
+> 「這個人在幹嘛？」
+
+這就不是普通 object detection。
+
+例如畫面：
+
+```text
+┌─────────────────────────┐
+│                         │
+│   👤                    │
+│   person                │
+│        📦               │
+│                         │
+└─────────────────────────┘
+```
+
+YOLO 可能告訴你：
+
+```json
+{
+  "person": 1,
+  "box": 1
+}
+```
+
+VLM 則可能回答：
+
+```text
+A person appears to be placing
+a cardboard box near the doorway.
+```
+
+這時我會考慮三個模型。
+
+### Qwen3-VL
+
+目前 Qwen3-VL 是非常強的本地 VLM 選項。
+
+它有：
+
+```text
+2B
+4B
+8B
+32B
+30B-A3B
+235B-A22B
+...
+```
+
+Qwen 官方在 2025 年 10 月釋出了 4B、8B 等 dense models。Qwen3-VL 特別強調 spatial perception、video dynamics、video temporal understanding，以及 timestamp-grounded event localization。:chatgpt-content-reference{index="7"}
+
+例如你可以每 2 秒抽一張：
+
+```text
+C400
+ ↓
+go2rtc
+ ↓
+frames
+ ↓
+Qwen3-VL
+```
+
+問：
+
+```text
+Describe what changed in the room
+during the last 10 seconds.
+
+Is anyone entering or leaving?
+
+Is there anything unusual?
+
+What object did the person place
+on the table?
+```
+
+這就是 YOLO 做不到的事情。
+
+以你這台 RTX 5080 16GB，我會優先實驗 **Qwen3-VL-4B-Instruct**；8B 可以再視量化、context 和 video token 數量調整。
+
+---
+
+## MiniCPM-V 4.6 更有意思
+
+如果你的重點是：
+
+> 「我要讓 camera 長時間、頻繁地送 frame 給 VLM。」
+
+我會認真測 **MiniCPM-V 4.6**。
+
+它在 **2026-05-11** 開源，只有約 **1.3B**，而且團隊就是針對 edge deployment 與 image/video understanding 設計；官方也特別強調視覺 token compression。:chatgpt-content-reference{index="9"}
+
+因此：
+
+```text
+Qwen3-VL
+→ reasoning 強
+→ 比較像「視覺大腦」
+
+MiniCPM-V 4.6
+→ 輕
+→ 高頻率
+→ 比較像「視覺 sensor intelligence」
+```
+
+這兩個我都會測。
+
+---
+
+## 還有一個很適合你玩的：MiniCPM-o 4.5
+
+這個其實跟 C400 更有趣。
+
+因為 C400 不只有：
+
+```text
+video
+```
+
+也有：
+
+```text
+audio
+```
+
+MiniCPM-o 4.5 則支援：
+
+```text
+streaming video
++
+streaming audio
++
+text
+```
+
+而且 OpenBMB 明確定位為 **real-time full-duplex omnimodal interaction**。:chatgpt-content-reference{index="10"}
+
+因此可以變成：
+
+```text
+               C400
+                 │
+          ┌──────┴──────┐
+          ↓             ↓
+       H.265           Audio
+          │             │
+          └──────┬──────┘
+                 ↓
+          MiniCPM-o 4.5
+                 ↓
+      multimodal understanding
+```
+
+例如：
+
+```text
+「剛才是誰進門？」
+「剛才有沒有人說話？」
+「桌上的東西是誰拿走的？」
+```
+
+這已經不只是 surveillance camera，而比較接近：
+
+> local multimodal ambient agent。
+
+---
+
+## Moondream 3.1 也值得列入
+
+Moondream 3.1 現在是一個 **9B total / 2B active MoE VLM**，直接提供非常工程導向的 API：
+
+```text
+caption()
+query()
+detect()
+point()
+segment()
+``` :chatgpt-content-reference{index="11"}
+
+
+例如：
+
+```python
+objects = model.detect(frame, "person")
+```
+
+或者：
+
+```python
+answer = model.query(
+    frame,
+    "Is anyone holding a package?"
+)
+```
+
+甚至：
+
+```python
+segment = model.segment(frame, "person")
+```
+
+官方 Photon runtime 在 2026 年也已持續擴充 Blackwell 支援；不過官方明確驗證的 Blackwell 型號包含 RTX PRO 6000 等，我不會把這等同於「RTX 5080 已官方驗證」。:chatgpt-content-reference{index="12"}
+
+---
+
+# 如果是我要幫你建，我會這樣做
+
+不是：
+
+```text
+C400
+ ↓
+一個超強 VLM
+ ↓
+全部交給它
+```
+
+而是：
+
+```text
+                   Xiaomi C400
+                        │
+                      H.265
+                        │
+                     go2rtc
+                        │
+                      RTSP
+                        ↓
+              ┌──────────────────┐
+              │   Frame Router   │
+              └────────┬─────────┘
+                       │
+         ┌─────────────┴──────────────┐
+         │                            │
+         ▼                            ▼
+     YOLO26s                     Audio / frames
+    10~30 FPS                       sampled
+         │                            │
+         ▼                            ▼
+ person / car                 MiniCPM-V / Qwen3-VL
+ dog / package                       │
+ pose / object                       │
+         │                            │
+         └───────────┬────────────────┘
+                     ↓
+                Event Engine
+                     │
+        ┌────────────┼────────────┐
+        ↓            ↓            ↓
+      JSON        Database      Agent
+        │
+        ↓
+{
+  "time": "...",
+  "event": "person_entered",
+  "objects": ["person", "package"],
+  "description":
+     "A person entered carrying a box."
+}
+```
+
+關鍵概念是：
+
+**Detector 負責 perception；VLM 負責 interpretation。**
+
+不要讓 VLM 每秒看 30 張圖。通常比較有效率的是：
+
+```text
+YOLO26
+30 FPS
+↓
+發現值得注意的 event
+↓
+保留 event 前後 3～10 秒
+↓
+抽 4～16 frames
+↓
+Qwen3-VL / MiniCPM-V
+↓
+semantic interpretation
+```
+
+如此 GPU 使用量會低非常多，而且 VLM 得到的是「有意義的事件」，不是幾萬張幾乎一模一樣的畫面。
+
+---
+
+### 我建議你的第一版 POC
+
+如果你現在就是要開始做，不要同時測十個模型。
+
+第一版只做：
+
+```text
+Xiaomi C400
+      ↓
+   go2rtc
+      ↓
+     RTSP
+      ↓
+   YOLO26s
+      ↓
+person detection
+      ↓
+觸發事件
+      ↓
+取前後 5 秒的 frames
+      ↓
+MiniCPM-V 4.6
+      ↓
+產生自然語言描述
+```
+
+完成標準只有一個：
+
+> **一個人走進 C400 畫面 → 系統自動產生一筆結構化事件，並描述他做了什麼。**
+
+例如：
+
+```json
+{
+  "timestamp": "2026-10-01T09:28:14+08:00",
+  "camera": "living_room",
+  "event": "person_detected",
+  "objects": [
+    "person",
+    "backpack"
+  ],
+  "description":
+    "A person entered the room carrying a black backpack."
+}
+```
+
+這個做完之後，再第二輪把：
+
+```text
+YOLO26
+→ YOLOE-26
+→ RF-DETR
+
+MiniCPM-V 4.6
+→ Qwen3-VL-4B
+→ Moondream 3.1
+```
+
+做成真正的 benchmark。
+
+我認為這會比現在先追求「哪個模型最強」更有研究價值，因為最後你真正要量的是：
+
+```text
+Detection accuracy
+Event recall
+False alarms
+End-to-end latency
+GPU VRAM
+GPU utilization
+Watts
+VLM semantic accuracy
+Temporal understanding
+24-hour stability
+```
+
+而不是單一模型的 benchmark 分數。這也很自然可以發展成一個「**local multimodal intelligent camera / agent perception stack**」的完整實驗平台。
+
+另外值得留意的是，**YOLO27 已經在 2026 年 9 月發表但尚未正式釋出**。如果它正式開放 checkpoint，我可以幫你追蹤，並判斷是否值得把 YOLO26 baseline 換掉。
+
+
+
+::chatgpt-content-reference{index="13"}
