@@ -1,0 +1,17 @@
+.local/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+go2rtc.yaml
+*.pt
+*.onnx
+*.engine
+*.mp4
+*.mkv
+*.avi
+*.wav
+*.jsonl
+runs/

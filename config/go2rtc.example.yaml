@@ -1,0 +1,9 @@
+# Copy to .local/go2rtc.yaml; chmod 600 before Xiaomi account onboarding.
+# Run on the camera's subnet. Only local applications can access this restream.
+app:
+  modules: [api, rtsp, xiaomi]
+api:
+  listen: "127.0.0.1:1984"
+rtsp:
+  listen: "127.0.0.1:8554"
+streams: {}

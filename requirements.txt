@@ -1,0 +1,4 @@
+# Install the CUDA wheels in requirements-gpu.txt first, in a fresh Python 3.12 venv.
+torch==2.14.1
+torchvision==0.29.1
+ultralytics==8.4.170
