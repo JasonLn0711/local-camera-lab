@@ -9,7 +9,7 @@
 | Primary-source 查核 | 已整理 | 有可實作的 upstream 路線；來源與修正見[攝影機](c400-go2rtc.zh-TW.md)及[模型](models-frameworks.zh-TW.md)筆記 |
 | 原文完整性 | SHA-256 已建立 | [來源檔](sources/2026-10-01-user-passage.txt)可與保存時位元組比對 |
 | 合成資料單元檢查／CLI／語法 | 本機 12 項測試、CLI help 與 Python 語法檢查通過 | 不依賴 torch、攝影機、網路或權重；含 synthetic model 的 orchestration 檢查 |
-| GitHub Actions | 待發布後核對 | 僅自動檢查程式與合成資料，不連線家庭 |
+| GitHub Actions | POC commit `63c93db` 的 [Checks run](https://github.com/JasonLn0711/local-camera-lab/actions/runs/36803215445) 已通過 | 僅自動檢查程式與合成資料，不連線家庭 |
 | go2rtc／C400 | 待回家 | 尚未取得真實串流，internal model 與韌體未知 |
 | CUDA／YOLO26 | 待回家 | 尚未安裝候選環境、下載模型或執行推論 |
 | accuracy／latency／power／24 小時穩定性 | 未測量 | 不將官方數據或合成測試當作本機結果 |
@@ -26,6 +26,8 @@ git diff --check
 涵蓋人物／無人物、confidence 邊界、類別過濾、冷卻邊界、JSONL 契約、無結果、非有限數值、非法參數、寫入失敗、錯誤退出與 Ctrl-C。資料全部是測試建立的合成值；不以 mock 結果宣稱模型 accuracy 或直播成功。
 
 發布檢查另核對 Markdown 相對連結、shell 範例語法、原文 SHA-256、`.gitignore` 與實際 tracked file 列表。公開來源全文中的示範 token／位址屬原始引用，必須與真實憑證區分；任何真實秘密或家庭資料都不得被 stage。
+
+本輪完成：26 個相對文件連結、18 個 shell code blocks 的 `bash -n`、8 個私人路徑的 `git check-ignore`、原文 SHA-256 與 staged diff whitespace 檢查。兩個初始提交為 `90eef3b`（研究文件）與 `63c93db`（POC／測試）；公開 `main` 已發布並完成 fresh-fetch 同步核對。完整歷史與最新 CI 見 [GitHub repo](https://github.com/JasonLn0711/local-camera-lab)；上述 CI 證據固定對應 POC commit，不將文件後續修訂當成新的模型驗證。
 
 ## 回家後驗收 gate
 
